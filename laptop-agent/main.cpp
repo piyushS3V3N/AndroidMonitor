@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <deque>
 #include <atomic>
+#include <fstream>
 #include "json.hpp"
 
 #ifdef __APPLE__
@@ -27,6 +28,8 @@
     #include <sys/sysctl.h>
     #include <sys/param.h>
     #include <sys/mount.h>
+#else
+    #include <sys/statvfs.h>
 #endif
 
 using json = nlohmann::json;
@@ -70,6 +73,8 @@ public:
     static json get_telemetry() {
         std::lock_guard<std::mutex> lock(g_data_mutex);
         double cpu = 0, mem_used = 0, mem_total = 0, disk_p = 0;
+        std::string net_info = "--";
+
 #ifdef __APPLE__
         host_cpu_load_info_data_t cpu_load;
         mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
@@ -84,12 +89,36 @@ public:
         vm_statistics64_data_t vm; mach_msg_type_number_t vmc = HOST_VM_INFO64_COUNT;
         if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info_t)&vm, &vmc) == KERN_SUCCESS) mem_used = (double)(vm.active_count + vm.wire_count) * 4096 / (1024*1024*1024);
         struct statfs st; if (statfs("/", &st) == 0) disk_p = 100.0 * (double)(st.f_blocks - st.f_bfree) / (double)st.f_blocks;
+        net_info = exec_shell("netstat -ibn | grep -e 'en0' | head -1 | awk '{print \"IN: \"$7\" | OUT: \"$10}'");
+#else
+        std::ifstream stat_file("/proc/stat");
+        if (stat_file.is_open()) {
+            std::string label; long user, nice, system, idle;
+            stat_file >> label >> user >> nice >> system >> idle;
+            static long p_u=0, p_n=0, p_s=0, p_i=0;
+            long user_diff = user - p_u, nice_diff = nice - p_n, sys_diff = system - p_s, idle_diff = idle - p_i;
+            long total = user_diff + nice_diff + sys_diff + idle_diff;
+            cpu = (total == 0) ? 0 : 100.0 * (double)(user_diff + sys_diff) / (double)total;
+            p_u = user; p_n = nice; p_s = system; p_i = idle;
+        }
+        std::ifstream mem_file("/proc/meminfo");
+        if (mem_file.is_open()) {
+            std::string line; long total_kb = 0, free_kb = 0, avail_kb = 0;
+            while (std::getline(mem_file, line)) {
+                if (line.find("MemTotal:") == 0) sscanf(line.c_str(), "MemTotal: %ld", &total_kb);
+                if (line.find("MemAvailable:") == 0) sscanf(line.c_str(), "MemAvailable: %ld", &avail_kb);
+            }
+            mem_total = (double)total_kb / (1024 * 1024);
+            mem_used = (double)(total_kb - avail_kb) / (1024 * 1024);
+        }
+        struct statvfs st; if (statvfs("/", &st) == 0) disk_p = 100.0 * (double)(st.f_blocks - st.f_bavail) / (double)st.f_blocks;
+        net_info = exec_shell("cat /proc/net/dev | grep -E 'eth0|wlan0|enp' | head -1 | awk '{print \"IN: \"$2\" | OUT: \"$10}'");
 #endif
+
         cpu_h.push_back(cpu); if(cpu_h.size() > 30) cpu_h.pop_front();
         mem_h.push_back((mem_total > 0) ? (mem_used/mem_total)*100.0 : 0); if(mem_h.size() > 30) mem_h.pop_front();
         disk_h.push_back(disk_p); if(disk_h.size() > 30) disk_h.pop_front();
-        return { {"type", "telemetry"}, {"cpu", cpu}, {"mem_used", mem_used}, {"disk_p", disk_p}, {"cpu_h", cpu_h}, {"mem_h", mem_h}, {"disk_h", disk_h},
-                 {"net_io", exec_shell("netstat -ibn | grep -e 'en0' | head -1 | awk '{print \"IN: \"$7\" | OUT: \"$10}'")} };
+        return { {"type", "telemetry"}, {"cpu", cpu}, {"mem_used", mem_used}, {"disk_p", disk_p}, {"cpu_h", cpu_h}, {"mem_h", mem_h}, {"disk_h", disk_h}, {"net_io", net_info} };
     }
 };
 std::deque<double> SystemMetrics::cpu_h, SystemMetrics::mem_h, SystemMetrics::disk_h;
@@ -112,6 +141,7 @@ void intel_fetcher() {
 class ClientSession {
 public:
     int socket; std::mutex send_mutex; std::atomic<bool> active;
+    std::string selected_pod; std::string selected_ns;
     ClientSession(int s) : socket(s), active(true) {}
     void send_msg(const std::string& msg) {
         std::lock_guard<std::mutex> lock(send_mutex);
@@ -122,17 +152,31 @@ public:
     }
 };
 
+void stream_pod_logs(std::shared_ptr<ClientSession> session, std::string ns, std::string pod) {
+    session->selected_ns = ns; session->selected_pod = pod;
+    std::thread([session, ns, pod]() {
+        std::string cmd = "kubectl logs -f " + pod + " -n " + ns + " --tail=100 2>/dev/null";
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) return;
+        char buffer[1024];
+        while (session->active && session->selected_pod == pod && fgets(buffer, sizeof(buffer), pipe)) {
+            session->send_msg(json({{"type", "k8s_log"}, {"message", "[" + ns + "/" + pod + "] " + std::string(buffer)}}).dump());
+        }
+        pclose(pipe);
+    }).detach();
+}
+
 void handle_client(int client_socket) {
     g_client_active = true;
     auto session = std::make_shared<ClientSession>(client_socket);
-    std::cout << "[DISPATCH] Global Mission Control Linked." << std::endl;
+    std::cout << "[DISPATCH] Mission Control Linked." << std::endl;
     std::thread([session]() {
         int tick = 0; int intel_idx = 0;
         while (session->active) {
             session->send_msg(SystemMetrics::get_telemetry().dump());
             if (tick % 3 == 0) {
                 session->send_msg(json({{"type", "processes"}, {"data", exec_shell("lsof -iTCP -sTCP:LISTEN -P -n | awk 'NR>1 {print $1 \" : \" $9}' | head -n 8")}}).dump());
-                session->send_msg(json({{"type", "docker"}, {"data", exec_shell("docker ps --format '{{.Names}} [{{.Image}}] ({{.Status}})' | head -n 5")}}).dump());
+                session->send_msg(json({{"type", "docker"}, {"data", exec_shell("docker ps --format '{{.Image}} : {{.Names}}' | head -n 8")}}).dump());
                 session->send_msg(json({{"type", "k8s_pods"}, {"data", exec_shell("kubectl get pods -A --no-headers -o custom-columns='NS:.metadata.namespace,POD:.metadata.name' | head -n 12")}}).dump());
                 session->send_msg(json({{"type", "sec_radar"}, {"data", exec_shell("lsof -iTCP -sTCP:ESTABLISHED -P -n | awk 'NR>1 {print $1 \" | \" $9}' | head -n 8")}}).dump());
             }
@@ -144,7 +188,20 @@ void handle_client(int client_socket) {
         }
         g_client_active = false;
     }).detach();
-    char b[1024]; while (session->active) if (recv(client_socket, b, sizeof(b), 0) <= 0) break;
+
+    char b[2048];
+    while (session->active) {
+        ssize_t n = recv(client_socket, b, sizeof(b) - 1, 0);
+        if (n <= 0) break;
+        b[n] = '\0';
+        try {
+            auto j = json::parse(std::string(b));
+            if (j["type"] == "select_pod") {
+                std::cout << "[K8S] Command received: Focusing pod " << j["pod"] << std::endl;
+                stream_pod_logs(session, j["namespace"], j["pod"]);
+            }
+        } catch (...) {}
+    }
     session->active = false; close(client_socket);
     std::cout << "[DISCONN] Hardware link dropped." << std::endl;
 }
@@ -158,7 +215,7 @@ int main() {
     struct sockaddr_in addr; addr.sin_family = AF_INET; addr.sin_addr.s_addr = INADDR_ANY; addr.sin_port = htons(PORT);
     bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
     listen(server_fd, 5);
-    std::cout << "[KAIZUKA MASTER ONLINE]" << std::endl;
+    std::cout << "[KAIZUKA MASTER ONLINE] Port 19090" << std::endl;
     while (true) {
         int c = accept(server_fd, NULL, NULL);
         if (c >= 0) std::thread(handle_client, c).detach();

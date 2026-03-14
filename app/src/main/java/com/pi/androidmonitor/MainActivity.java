@@ -35,7 +35,6 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
-import java.net.InetAddress;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
@@ -51,10 +50,12 @@ public class MainActivity extends AppCompatActivity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<String> namespaces = new ArrayList<>();
     
+    // Connectivity
     private UsbManager usbManager;
     private ParcelFileDescriptor fileDescriptor;
     private FileInputStream inputStream;
     private FileOutputStream outputStream;
+    private PrintWriter networkOut;
     private boolean isLinked = false;
     private String discoveredIp = null;
 
@@ -126,7 +127,6 @@ public class MainActivity extends AppCompatActivity {
         if (rv != null) { rv.setLayoutManager(new LinearLayoutManager(this)); rv.setAdapter(adapter); }
     }
 
-    // 1. DISCOVERY: Hear Laptop Beacon via UDP
     private void startDiscoveryLoop() {
         new Thread(() -> {
             try {
@@ -139,40 +139,31 @@ public class MainActivity extends AppCompatActivity {
                     String msg = new String(packet.getData(), 0, packet.getLength());
                     if (msg.contains("KAIZUKA_BEACON")) {
                         discoveredIp = packet.getAddress().getHostAddress();
-                        Log.i(TAG, "Laptop Discovered at: " + discoveredIp);
                     }
                 }
             } catch (Exception e) { Log.e(TAG, "Discovery failed", e); }
         }).start();
     }
 
-    // 2. HARDWARE LINK: Pure USB or Discovered IP
     private void startHardwareLinkLoop() {
         new Thread(() -> {
             while (true) {
                 if (isLinked) { try { Thread.sleep(5000); } catch (Exception ignored) {} continue; }
-
-                // Path A: Direct USB Accessory (AOA)
                 UsbAccessory[] accs = usbManager.getAccessoryList();
                 if (accs != null && accs.length > 0) {
                     mainHandler.post(() -> requestUsbPermission(accs[0]));
                     try { Thread.sleep(5000); } catch (Exception ignored) {} continue;
                 }
-                
-                // Path B: Discovered IP (WiFi/Direct Network)
                 if (discoveredIp != null) {
                     try {
                         Socket s = new Socket(discoveredIp, 19090);
                         handleConnection(new BufferedReader(new InputStreamReader(s.getInputStream())), new PrintWriter(s.getOutputStream(), true));
                     } catch (Exception ignored) {}
                 }
-
-                // Path C: ADB Bridge (127.0.0.1)
                 try {
                     Socket s = new Socket("127.0.0.1", 19090);
                     handleConnection(new BufferedReader(new InputStreamReader(s.getInputStream())), new PrintWriter(s.getOutputStream(), true));
                 } catch (Exception ignored) {}
-                
                 mainHandler.post(() -> { if(statusText!=null) statusText.setText("AWAITING.LINK"); });
                 try { Thread.sleep(3000); } catch (Exception ignored) {}
             }
@@ -210,11 +201,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void closeAccessory() {
         try { if (fileDescriptor != null) fileDescriptor.close(); } catch (Exception ignored) {}
-        fileDescriptor = null;
+        fileDescriptor = null; outputStream = null;
     }
 
     private void handleConnection(BufferedReader in, PrintWriter out) {
         isLinked = true;
+        networkOut = out; // Store for command dispatch
         mainHandler.post(() -> { if(statusText!=null) statusText.setText("HW.LINK.OK"); });
         try {
             String line;
@@ -224,6 +216,41 @@ public class MainActivity extends AppCompatActivity {
             }
         } catch (Exception e) { Log.e(TAG, "Connection lost", e); }
         isLinked = false;
+        networkOut = null;
+    }
+
+    private void handlePodSelection(String raw) {
+        String[] parts = raw.trim().split("\\s+");
+        if (parts.length >= 2) {
+            try {
+                JSONObject j = new JSONObject();
+                j.put("type", "select_pod");
+                j.put("namespace", parts[0]);
+                j.put("pod", parts[1]);
+                dispatchCommand(j.toString());
+                
+                NativeBridge.pushTerminal("\n[ACTION] FOCUSING POD: " + parts[1] + "\n");
+                k8sLogAdapter.setData(NativeBridge.getTerminal());
+            } catch (Exception e) { Log.e(TAG, "Command failed", e); }
+        }
+    }
+
+    private void dispatchCommand(String cmd) {
+        new Thread(() -> {
+            try {
+                String frame = cmd + "\n";
+                // 1. Try Network Path
+                if (networkOut != null) {
+                    networkOut.println(cmd);
+                    networkOut.flush();
+                }
+                // 2. Try USB Path
+                if (outputStream != null) {
+                    outputStream.write(frame.getBytes());
+                    outputStream.flush();
+                }
+            } catch (Exception e) { Log.e(TAG, "Dispatch error", e); }
+        }).start();
     }
 
     private void handleJson(String raw) {
@@ -271,19 +298,6 @@ public class MainActivity extends AppCompatActivity {
             ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, namespaces);
             adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
             nsSpinner.setAdapter(adapter);
-        }
-    }
-
-    private void handlePodSelection(String raw) {
-        String[] parts = raw.trim().split("\\s+");
-        if (parts.length >= 2) {
-            try {
-                JSONObject j = new JSONObject();
-                j.put("type", "select_pod"); j.put("namespace", parts[0]); j.put("pod", parts[1]);
-                new Thread(() -> { try { if(outputStream != null) outputStream.write((j.toString()+"\n").getBytes()); } catch(Exception ignored){} }).start();
-                NativeBridge.pushTerminal("\n--- FOCUS: " + parts[1] + " ---\n");
-                k8sLogAdapter.setData(NativeBridge.getTerminal());
-            } catch (Exception ignored) {}
         }
     }
 
