@@ -47,4 +47,3 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 **DEVELOPER OPERATOR: PIYUSH PARASHAR**  
-*KAIZUKA.OS // MISSION READY*
