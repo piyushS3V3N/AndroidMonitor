@@ -11,217 +11,150 @@
 #include <memory>
 #include <array>
 #include <fcntl.h>
-#include <util.h> 
-#include <termios.h>
-#include <sys/ioctl.h>
-#include <sys/sysctl.h>
-#include <mach/mach_host.h>
-#include <mach/mach_init.h>
 #include <mutex>
 #include <sstream>
 #include <sys/stat.h>
-
-#include <IOKit/IOKitLib.h>
-#include <IOKit/usb/IOUSBLib.h>
-#include <CoreFoundation/CoreFoundation.h>
-
+#include <sys/mount.h>
+#include <signal.h>
+#include <deque>
+#include <atomic>
+#include <algorithm>
 #include "json.hpp"
+
+#ifdef __APPLE__
+    #include <util.h>
+    #include <termios.h>
+    #include <sys/ioctl.h>
+    #include <sys/sysctl.h>
+    #include <mach/mach_host.h>
+    #include <mach/mach_init.h>
+    #include <IOKit/IOKitLib.h>
+    #include <IOKit/usb/IOUSBLib.h>
+    #include <CoreFoundation/CoreFoundation.h>
+#endif
 
 using json = nlohmann::json;
 #define PORT 19090
 
+void setup_signals() { signal(SIGPIPE, SIG_IGN); }
+
 std::string exec_shell(const std::string& cmd) {
-    std::array<char, 512> buffer;
+    std::array<char, 1024> buffer;
     std::string result;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
+    std::string silent_cmd = "{ " + cmd + "; } 2>/dev/null";
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(silent_cmd.c_str(), "r"), pclose);
     if (!pipe) return "";
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();
-    }
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) result += buffer.data();
     return result;
 }
 
-void run_adb_reverse() {
-    std::cout << "[BRIDGE] Triggering ADB Reverse Tunnel on port " << PORT << "..." << std::endl;
-    system("adb reverse --remove-all 2>/dev/null");
-    system(("adb reverse tcp:" + std::to_string(PORT) + " tcp:" + std::to_string(PORT) + " 2>/dev/null").c_str());
-}
-
-void device_added(void* refCon, io_iterator_t iterator) {
-    io_service_t device;
-    while ((device = IOIteratorNext(iterator))) {
-        run_adb_reverse();
-        IOObjectRelease(device);
-    }
-}
-
-void start_usb_monitor() {
-    std::thread([]() {
-        IONotificationPortRef notificationPort = IONotificationPortCreate(kIOMasterPortDefault);
-        CFRunLoopSourceRef runLoopSource = IONotificationPortGetRunLoopSource(notificationPort);
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, kCFRunLoopDefaultMode);
-        io_iterator_t addedIter;
-        CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
-        IOServiceAddMatchingNotification(notificationPort, kIOPublishNotification, matchingDict, device_added, NULL, &addedIter);
-        device_added(NULL, addedIter);
-        CFRunLoopRun();
-    }).detach();
-}
-
 class SystemMetrics {
+    static std::deque<double> cpu_h;
 public:
-    static std::string get_cpu() {
+    static json get_telemetry() {
+        double cpu = 0, mem_used = 0, disk_p = 0;
+#ifdef __APPLE__
         host_cpu_load_info_data_t cpu_load;
         mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
-        if (host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, (host_info_t)&cpu_load, &count) != KERN_SUCCESS) return "0%";
-        static unsigned long long prev_user = 0, prev_system = 0, prev_idle = 0, prev_nice = 0;
-        unsigned long long user = cpu_load.cpu_ticks[CPU_STATE_USER];
-        unsigned long long system = cpu_load.cpu_ticks[CPU_STATE_SYSTEM];
-        unsigned long long idle = cpu_load.cpu_ticks[CPU_STATE_IDLE];
-        unsigned long long nice = cpu_load.cpu_ticks[CPU_STATE_NICE];
-        unsigned long long total = (user - prev_user) + (system - prev_system) + (idle - prev_idle) + (nice - prev_nice);
-        double usage = (total == 0) ? 0 : 100.0 * (double)((user - prev_user) + (system - prev_system)) / (double)total;
-        prev_user = user; prev_system = system; prev_idle = idle; prev_nice = nice;
-        char buf[16]; snprintf(buf, 16, "%.1f%%", usage);
-        return std::string(buf);
-    }
-    static std::string get_mem() {
-        int64_t memsize;
-        size_t len = sizeof(memsize);
-        sysctlbyname("hw.memsize", &memsize, &len, NULL, 0);
-        return std::to_string(memsize / (1024 * 1024 * 1024)) + "GB";
-    }
-};
-
-class Protocol {
-public:
-    static std::string terminal(const std::string& data) { return json({{"type", "terminal"}, {"data", data}}).dump() + "\n"; }
-    static std::string log(const std::string& level, const std::string& message) { return json({{"type", "log"}, {"level", level}, {"message", message}}).dump() + "\n"; }
-    static std::string status(const std::string& cpu, const std::string& mem) { return json({{"type", "status"}, {"cpu", cpu}, {"memory", mem}}).dump() + "\n"; }
-    static std::string git(const std::string& branch, const std::string& status) { return json({{"type", "git"}, {"branch", branch}, {"status", status}}).dump() + "\n"; }
-    static std::string processes(const std::string& data) { return json({{"type", "processes"}, {"data", data}}).dump() + "\n"; }
-    static std::string project(const std::string& tech) { return json({{"type", "project"}, {"tech", tech}}).dump() + "\n"; }
-};
-
-class TerminalEngine {
-    int master_fd; pid_t child_pid; int client_socket; std::mutex& send_mutex;
-public:
-    TerminalEngine(int client_sock, std::mutex& mutex) : master_fd(-1), child_pid(-1), client_socket(client_sock), send_mutex(mutex) {}
-    void start() {
-        struct winsize ws = {24, 80, 0, 0};
-        child_pid = forkpty(&master_fd, NULL, NULL, &ws);
-        if (child_pid == 0) {
-            setenv("TERM", "xterm-256color", 1);
-            execl("/bin/zsh", "zsh", "--login", NULL);
-            _exit(1);
+        if (host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, (host_info_t)&cpu_load, &count) == KERN_SUCCESS) {
+            static unsigned long long pv_u=0, pv_s=0, pv_i=0, pv_n=0;
+            unsigned long long u = cpu_load.cpu_ticks[CPU_STATE_USER], s = cpu_load.cpu_ticks[CPU_STATE_SYSTEM], i = cpu_load.cpu_ticks[CPU_STATE_IDLE], n = cpu_load.cpu_ticks[CPU_STATE_NICE];
+            unsigned long long tot = (u-pv_u)+(s-pv_s)+(i-pv_i)+(n-pv_n);
+            cpu = (tot == 0) ? 0 : 100.0 * (double)((u-pv_u)+(s-pv_s)) / (double)tot;
+            pv_u=u; pv_s=s; pv_i=i; pv_n=n;
         }
-        std::thread([this]() {
-            char buffer[4096];
-            while (true) {
-                ssize_t n = read(master_fd, buffer, sizeof(buffer));
-                if (n <= 0) break;
-                std::string msg = Protocol::terminal(std::string(buffer, n));
-                std::lock_guard<std::mutex> lock(send_mutex);
-                if (send(client_socket, msg.c_str(), msg.length(), 0) < 0) break;
-            }
-            close(master_fd);
-        }).detach();
+        vm_statistics64_data_t vm_stats;
+        mach_msg_type_number_t vm_count = HOST_VM_INFO64_COUNT;
+        if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info_t)&vm_stats, &vm_count) == KERN_SUCCESS) {
+            mem_used = (double)(vm_stats.active_count + vm_stats.wire_count) * PAGE_SIZE / (1024*1024*1024);
+        }
+        struct statfs stats;
+        if (statfs("/", &stats) == 0) disk_p = 100.0 * (double)(stats.f_blocks - stats.f_bfree) / (double)stats.f_blocks;
+#endif
+        cpu_h.push_back(cpu); if(cpu_h.size() > 30) cpu_h.pop_front();
+        return {{"type", "telemetry"}, {"cpu", cpu}, {"mem_used", mem_used}, {"disk_p", disk_p}, {"cpu_h", cpu_h}};
     }
-    void write_input(const std::string& input) { if (master_fd != -1) write(master_fd, input.c_str(), input.length()); }
 };
+std::deque<double> SystemMetrics::cpu_h;
 
-bool file_exists(const std::string& name) {
-    struct stat buffer;   
-    return (stat (name.c_str(), &buffer) == 0); 
-}
-
-std::string detect_tech() {
-    if (file_exists("build.gradle.kts") || file_exists("build.gradle")) return "android";
-    if (file_exists("package.json")) return "nodejs";
-    if (file_exists("pom.xml")) return "maven";
-    if (file_exists("CMakeLists.txt")) return "cpp";
-    return "generic";
-}
-
-void handle_client(int client_socket) {
-    std::mutex send_mutex;
-    TerminalEngine terminal(client_socket, send_mutex);
-    terminal.start();
-
-    std::string tech = detect_tech();
-    {
-        std::string tech_msg = Protocol::project(tech);
+class ClientSession {
+public:
+    int socket; std::mutex send_mutex; std::atomic<bool> active;
+    std::string selected_pod; std::string selected_ns;
+    ClientSession(int s) : socket(s), active(true) {}
+    void send_msg(const std::string& msg) {
         std::lock_guard<std::mutex> lock(send_mutex);
-        send(client_socket, tech_msg.c_str(), tech_msg.length(), 0);
+        if (active) send(socket, msg.c_str(), msg.length(), 0);
     }
+};
 
-    std::thread([client_socket, &send_mutex]() {
-        while (true) {
-            std::string proc_data = exec_shell("ps -Ao pid,pcpu,pmem,comm -r | head -n 16");
-            std::string cpu = SystemMetrics::get_cpu();
-            std::string mem = SystemMetrics::get_mem();
-            std::string git_branch = exec_shell("git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'N/A'");
-            
-            std::string proc_msg = Protocol::processes(proc_data);
-            std::string status_msg = Protocol::status(cpu, mem);
-            std::string git_msg = Protocol::git(git_branch, "Active");
-
-            {
-                std::lock_guard<std::mutex> lock(send_mutex);
-                if (send(client_socket, proc_msg.c_str(), proc_msg.length(), 0) < 0) break;
-                send(client_socket, status_msg.c_str(), status_msg.length(), 0);
-                send(client_socket, git_msg.c_str(), git_msg.length(), 0);
-            }
-            std::this_thread::sleep_for(std::chrono::seconds(2));
-        }
-    }).detach();
-
-    std::thread([client_socket, &send_mutex, tech]() {
-        std::string log_file = "logs/app.log";
-        if (tech == "android") log_file = "build.log";
-        system("mkdir -p logs && touch logs/app.log");
-        
-        FILE* pipe = popen(("tail -f " + log_file + " 2>/dev/null").c_str(), "r");
+void stream_pod_logs(std::shared_ptr<ClientSession> session, std::string ns, std::string pod) {
+    session->selected_ns = ns; session->selected_pod = pod;
+    std::thread([session, ns, pod]() {
+        std::string cmd = "kubectl logs -f " + pod + " -n " + ns + " --tail=50 2>/dev/null";
+        FILE* pipe = popen(cmd.c_str(), "r");
         if (!pipe) return;
         char buffer[1024];
-        while (fgets(buffer, sizeof(buffer), pipe)) {
-            std::string line(buffer);
-            std::string msg = Protocol::log("INFO", line);
-            std::lock_guard<std::mutex> lock(send_mutex);
-            if (send(client_socket, msg.c_str(), msg.length(), 0) < 0) break;
+        while (session->active && session->selected_pod == pod && fgets(buffer, sizeof(buffer), pipe)) {
+            session->send_msg(json({{"type", "k8s_log"}, {"message", "[" + ns + "/" + pod + "] " + std::string(buffer)}}).dump() + "\n");
         }
         pclose(pipe);
     }).detach();
+}
 
-    char buffer[4096];
-    while (true) {
-        int n = read(client_socket, buffer, sizeof(buffer));
+void handle_client(int client_socket) {
+    auto session = std::make_shared<ClientSession>(client_socket);
+    
+    // Core Infrastructure & Intelligence Loop
+    std::thread([session]() {
+        const std::string intel_feed[] = {
+            "!!! CVE ALERT: Critical 0-day in libssh2. Patch available.",
+            "HUD: Kubernetes 1.32 performance benchmarks released.",
+            "NEWS: New 'ShieldDev' tool simplifies DevSecOps pipelines.",
+            "HUD: macOS kernel hardening updates detected.",
+            "INTEL: Global traffic spike in automated botnet scans."
+        };
+        int intel_idx = 0;
+
+        while (session->active) {
+            session->send_msg(SystemMetrics::get_telemetry().dump() + "\n");
+            session->send_msg(json({{"type", "processes"}, {"data", exec_shell("ps -Ao pcpu,pid,comm -r | head -n 8 | tail -n +2 | awk '{print $1\"% | \"$2}'")}}).dump() + "\n");
+            session->send_msg(json({{"type", "docker"}, {"data", exec_shell("docker ps --format '{{.Names}} ({{.Status}})' | head -n 5")}}).dump() + "\n");
+            session->send_msg(json({{"type", "k8s_pods"}, {"data", exec_shell("kubectl get pods -A --no-headers -o custom-columns='NS:.metadata.namespace,POD:.metadata.name' | head -n 12")}}).dump() + "\n");
+            session->send_msg(json({{"type", "sec_radar"}, {"data", exec_shell("lsof -iTCP -sTCP:ESTABLISHED -P -n | awk '{print $1 \" | \" $9}' | head -n 8")}}).dump() + "\n");
+            
+            // Intelligence Stream
+            session->send_msg(json({{"type", "intel_news"}, {"message", intel_feed[intel_idx++ % 5]}}).dump() + "\n");
+
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+        }
+    }).detach();
+
+    char buffer[2048];
+    while (session->active) {
+        ssize_t n = read(client_socket, buffer, sizeof(buffer));
         if (n <= 0) break;
         try {
             auto j = json::parse(std::string(buffer, n));
-            if (j["type"] == "command") terminal.write_input(j["command"].get<std::string>() + "\n");
+            if (j["type"] == "select_pod") stream_pod_logs(session, j["namespace"], j["pod"]);
         } catch (...) {}
     }
+    session->active = false;
     close(client_socket);
 }
 
 int main() {
-    start_usb_monitor();
-    run_adb_reverse();
-
+    setup_signals();
+    system("adb reverse tcp:19090 tcp:19090 2>/dev/null");
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    struct sockaddr_in address;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr("127.0.0.1");
-    address.sin_port = htons(PORT);
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) return 1;
+    int opt = 1; setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in addr; addr.sin_family = AF_INET; addr.sin_addr.s_addr = inet_addr("127.0.0.1"); addr.sin_port = htons(PORT);
+    bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
     listen(server_fd, 5);
-    std::cout << "[MASTER AGENT] Active on 127.0.0.1:" << PORT << std::endl;
+    std::cout << "[INTEL AGENT] Online on 127.0.0.1:19090" << std::endl;
     while (true) {
-        int client = accept(server_fd, NULL, NULL);
-        if (client >= 0) std::thread(handle_client, client).detach();
+        int c = accept(server_fd, NULL, NULL);
+        if (c >= 0) std::thread(handle_client, c).detach();
     }
     return 0;
 }
