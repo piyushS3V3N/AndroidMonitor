@@ -1,60 +1,183 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg_dark"
-    android:orientation="vertical"
-    android:padding="4dp">
+    android:padding="1dp"
+    tools:context=".MainActivity">
 
+    <!-- ROW 1: MASTER IDENTITY & TELEMETRY (25%) -->
     <LinearLayout
+        android:id="@+id/row1"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:orientation="horizontal">
+        android:orientation="horizontal"
+        app:layout_constraintHeight_percent="0.25"
+        app:layout_constraintTop_toTopOf="parent">
 
-        <!-- Left Column -->
-        <LinearLayout
+        <!-- TILE 1: MASTER IDENTITY & INFRA (CONSOLIDATED) -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.2"
+            app:cardBackgroundColor="@color/bg_sidebar"
+            app:cardCornerRadius="0dp"
+            android:layout_margin="1dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="10dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:text="KAIZUKA.OS // DEVSECOPS"
+                    android:textColor="@color/accent_primary"
+                    android:textSize="24sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:fontFamily="monospace"
+                    android:text="OPERATOR: PIYUSH PARASHAR"
+                    android:textColor="@color/white"
+                    android:textSize="16sp" />
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#222222" android:layout_marginTop="8dp" android:layout_marginBottom="8dp" />
+                <TextView android:id="@+id/net_io_text" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="NET: --" android:textColor="@color/accent_info" android:textSize="9sp" android:fontFamily="monospace" />
+
+                <View android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+                <TextView android:id="@+id/status_text" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="CONNECTED" android:textColor="@color/accent_primary" android:textSize="9sp" android:fontFamily="monospace" android:gravity="center" android:background="#1A1A1A" android:padding="4dp" />
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- TILE 2: STACKED ANALYTICS -->
+        <androidx.cardview.widget.CardView
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:orientation="vertical">
-            <include layout="@layout/panel_terminal" />
-            <include layout="@layout/panel_errors" />
-            <include layout="@layout/panel_git" />
-            <include layout="@layout/panel_overview" />
-        </LinearLayout>
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="0dp"
+            android:layout_margin="1dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="4dp">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/cpu_text" android:layout_width="50dp" android:layout_height="wrap_content" android:text="CPU:--" android:textColor="@color/white" android:textSize="8sp" android:fontFamily="monospace" />
+                    <com.github.mikephil.charting.charts.LineChart android:id="@+id/cpu_chart" android:layout_width="match_parent" android:layout_height="match_parent" />
+                </LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/mem_text" android:layout_width="50dp" android:layout_height="wrap_content" android:text="RAM:--" android:textColor="@color/white" android:textSize="8sp" android:fontFamily="monospace" />
+                    <com.github.mikephil.charting.charts.LineChart android:id="@+id/ram_chart" android:layout_width="match_parent" android:layout_height="match_parent" />
+                </LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/disk_text" android:layout_width="50dp" android:layout_height="wrap_content" android:text="DSK:--" android:textColor="@color/white" android:textSize="8sp" android:fontFamily="monospace" />
+                    <com.github.mikephil.charting.charts.LineChart android:id="@+id/disk_chart" android:layout_width="match_parent" android:layout_height="match_parent" />
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
 
-        <!-- Right Column -->
-        <LinearLayout
+        <!-- TILE 3: CYBER INTEL -->
+        <androidx.cardview.widget.CardView
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:orientation="vertical">
-            <include layout="@layout/panel_logs" />
-            <include layout="@layout/panel_build_test" />
-            <include layout="@layout/panel_metrics" />
-            <include layout="@layout/panel_docker" />
-            <include layout="@layout/panel_timeline" />
-        </LinearLayout>
-
+            android:layout_weight="1.5"
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="0dp"
+            android:layout_margin="1dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="6dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="[ THREAT.INTEL.FEED ]" android:textColor="@color/accent_primary" android:textSize="8sp" android:fontFamily="monospace" android:textStyle="bold" />
+                <androidx.recyclerview.widget.RecyclerView android:id="@+id/rv_intel" android:layout_width="match_parent" android:layout_height="match_parent" />
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
     </LinearLayout>
 
-    <!-- Bottom Status Bar -->
-    <androidx.cardview.widget.CardView
+    <!-- ROW 2: KUBERNETES PRIMARY OPS (45%) -->
+    <LinearLayout
+        android:id="@+id/row2"
         android:layout_width="match_parent"
-        android:layout_height="24dp"
-        app:cardBackgroundColor="@color/bg_sidebar"
-        app:cardCornerRadius="0dp">
-        <TextView
-            android:id="@+id/status_text"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:gravity="center"
-            android:text="DISCONNECTED"
-            android:textColor="@color/accent_primary"
-            android:textSize="9sp"
-            android:fontFamily="monospace" />
-    </androidx.cardview.widget.CardView>
+        android:layout_height="0dp"
+        android:orientation="horizontal"
+        app:layout_constraintHeight_percent="0.45"
+        app:layout_constraintTop_toBottomOf="@id/row1">
 
-</LinearLayout>
+        <androidx.cardview.widget.CardView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            app:cardBackgroundColor="@color/black"
+            app:cardCornerRadius="0dp"
+            android:layout_margin="1dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
+                <RelativeLayout android:layout_width="match_parent" android:layout_height="30dp" android:background="#222222" android:paddingStart="8dp">
+                    <TextView android:id="@+id/label_ns" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="[ NS ]" android:textColor="@color/accent_primary" android:textSize="10sp" android:layout_centerVertical="true" android:textStyle="bold" />
+                    <Spinner android:id="@+id/spinner_namespace" android:layout_width="wrap_content" android:layout_height="match_parent" android:layout_toEndOf="@id/label_ns" android:backgroundTint="@color/accent_primary" />
+                </RelativeLayout>
+                <androidx.recyclerview.widget.RecyclerView android:id="@+id/rv_k8s_pods" android:layout_width="match_parent" android:layout_height="match_parent" />
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.8"
+            app:cardBackgroundColor="@color/black"
+            app:cardCornerRadius="0dp"
+            android:layout_margin="1dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="[ MISSION.LOG.STREAM ]" android:textColor="@color/white" android:textSize="8sp" android:padding="4dp" android:background="#111111" />
+                <androidx.recyclerview.widget.RecyclerView android:id="@+id/rv_k8s_logs" android:layout_width="match_parent" android:layout_height="match_parent" android:padding="4dp" />
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+    </LinearLayout>
+
+    <!-- ROW 3: INFRA & SEC RADAR (30%) -->
+    <LinearLayout
+        android:id="@+id/row3"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:orientation="horizontal"
+        app:layout_constraintHeight_percent="0.3"
+        app:layout_constraintTop_toBottomOf="@id/row2"
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="0dp"
+            android:layout_margin="1dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="4dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="[ NETWORK.LISTENERS ]" android:textColor="@color/accent_primary" android:textSize="9sp" android:fontFamily="monospace" android:textStyle="bold" />
+                <androidx.recyclerview.widget.RecyclerView android:id="@+id/rv_processes" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/black" />
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.8"
+            app:cardBackgroundColor="@color/bg_card"
+            app:cardCornerRadius="0dp"
+            android:layout_margin="1dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="4dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="[ DOCKER ]" android:textColor="@color/accent_secondary" android:textSize="9sp" android:fontFamily="monospace" />
+                <androidx.recyclerview.widget.RecyclerView android:id="@+id/rv_docker" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/black" />
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.2"
+            app:cardBackgroundColor="@color/black"
+            app:cardCornerRadius="0dp"
+            android:layout_margin="1dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="4dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="[ SEC.RADAR ]" android:textColor="#FF5555" android:fontFamily="monospace" android:textSize="8sp" />
+                <androidx.recyclerview.widget.RecyclerView android:id="@+id/rv_radar" android:layout_width="match_parent" android:layout_height="match_parent" />
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

@@ -49,10 +49,10 @@ std::string exec_shell(const std::string& cmd) {
 }
 
 class SystemMetrics {
-    static std::deque<double> cpu_h;
+    static std::deque<double> cpu_h, mem_h, disk_h;
 public:
     static json get_telemetry() {
-        double cpu = 0, mem_used = 0, disk_p = 0;
+        double cpu = 0, mem_used = 0, mem_total = 0, disk_p = 0;
 #ifdef __APPLE__
         host_cpu_load_info_data_t cpu_load;
         mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
@@ -63,19 +63,41 @@ public:
             cpu = (tot == 0) ? 0 : 100.0 * (double)((u-pv_u)+(s-pv_s)) / (double)tot;
             pv_u=u; pv_s=s; pv_i=i; pv_n=n;
         }
+        int64_t total_ram; size_t len = sizeof(total_ram);
+        sysctlbyname("hw.memsize", &total_ram, &len, NULL, 0);
+        mem_total = (double)total_ram / (1024*1024*1024);
         vm_statistics64_data_t vm_stats;
         mach_msg_type_number_t vm_count = HOST_VM_INFO64_COUNT;
         if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info_t)&vm_stats, &vm_count) == KERN_SUCCESS) {
             mem_used = (double)(vm_stats.active_count + vm_stats.wire_count) * PAGE_SIZE / (1024*1024*1024);
         }
-        struct statfs stats;
-        if (statfs("/", &stats) == 0) disk_p = 100.0 * (double)(stats.f_blocks - stats.f_bfree) / (double)stats.f_blocks;
+        struct statfs st;
+        if (statfs("/", &st) == 0) disk_p = 100.0 * (double)(st.f_blocks - st.f_bfree) / (double)st.f_blocks;
 #endif
         cpu_h.push_back(cpu); if(cpu_h.size() > 30) cpu_h.pop_front();
-        return {{"type", "telemetry"}, {"cpu", cpu}, {"mem_used", mem_used}, {"disk_p", disk_p}, {"cpu_h", cpu_h}};
+        mem_h.push_back((mem_total > 0) ? (mem_used/mem_total)*100.0 : 0); if(mem_h.size() > 30) mem_h.pop_front();
+        disk_h.push_back(disk_p); if(disk_h.size() > 30) disk_h.pop_front();
+
+        return {
+            {"type", "telemetry"}, {"cpu", cpu}, {"mem_used", mem_used}, {"disk_p", disk_p}, 
+            {"cpu_h", cpu_h}, {"mem_h", mem_h}, {"disk_h", disk_h},
+            {"net_io", exec_shell("netstat -ibn | grep -e 'en0' | head -1 | awk '{print \"IN: \"$7\" | OUT: \"$10}'")}
+        };
     }
 };
-std::deque<double> SystemMetrics::cpu_h;
+std::deque<double> SystemMetrics::cpu_h, SystemMetrics::mem_h, SystemMetrics::disk_h;
+
+std::vector<std::string> fetch_real_intel() {
+    std::vector<std::string> news;
+    std::string raw = exec_shell("curl -s https://feeds.feedburner.com/TheHackersNews | grep -oEi '<title>[^<]+' | sed 's/<title>//g' | head -n 15");
+    std::stringstream ss(raw);
+    std::string line;
+    while (std::getline(ss, line)) {
+        if (!line.empty() && line.find("The Hacker News") == std::string::npos) news.push_back("SEC: " + line);
+    }
+    if (news.empty()) news.push_back("INTEL: Synchronizing threat-feed...");
+    return news;
+}
 
 class ClientSession {
 public:
@@ -104,29 +126,17 @@ void stream_pod_logs(std::shared_ptr<ClientSession> session, std::string ns, std
 
 void handle_client(int client_socket) {
     auto session = std::make_shared<ClientSession>(client_socket);
-    
-    // Core Infrastructure & Intelligence Loop
     std::thread([session]() {
-        const std::string intel_feed[] = {
-            "!!! CVE ALERT: Critical 0-day in libssh2. Patch available.",
-            "HUD: Kubernetes 1.32 performance benchmarks released.",
-            "NEWS: New 'ShieldDev' tool simplifies DevSecOps pipelines.",
-            "HUD: macOS kernel hardening updates detected.",
-            "INTEL: Global traffic spike in automated botnet scans."
-        };
-        int intel_idx = 0;
-
+        int news_timer = 0; std::vector<std::string> live_news = fetch_real_intel(); int story_idx = 0;
         while (session->active) {
             session->send_msg(SystemMetrics::get_telemetry().dump() + "\n");
-            session->send_msg(json({{"type", "processes"}, {"data", exec_shell("ps -Ao pcpu,pid,comm -r | head -n 8 | tail -n +2 | awk '{print $1\"% | \"$2}'")}}).dump() + "\n");
-            session->send_msg(json({{"type", "docker"}, {"data", exec_shell("docker ps --format '{{.Names}} ({{.Status}})' | head -n 5")}}).dump() + "\n");
+            session->send_msg(json({{"type", "processes"}, {"data", exec_shell("lsof -iTCP -sTCP:LISTEN -P -n | awk 'NR>1 {print $1 \" : \" $9}' | head -n 8")}}).dump() + "\n");
+            session->send_msg(json({{"type", "docker"}, {"data", exec_shell("docker ps --format '{{.Names}} [{{.Image}}] ({{.Status}})' | head -n 5")}}).dump() + "\n");
             session->send_msg(json({{"type", "k8s_pods"}, {"data", exec_shell("kubectl get pods -A --no-headers -o custom-columns='NS:.metadata.namespace,POD:.metadata.name' | head -n 12")}}).dump() + "\n");
-            session->send_msg(json({{"type", "sec_radar"}, {"data", exec_shell("lsof -iTCP -sTCP:ESTABLISHED -P -n | awk '{print $1 \" | \" $9}' | head -n 8")}}).dump() + "\n");
-            
-            // Intelligence Stream
-            session->send_msg(json({{"type", "intel_news"}, {"message", intel_feed[intel_idx++ % 5]}}).dump() + "\n");
-
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            session->send_msg(json({{"type", "sec_radar"}, {"data", exec_shell("lsof -iTCP -sTCP:ESTABLISHED -P -n | awk 'NR>1 {print $1 \" | \" $9}' | head -n 8")}}).dump() + "\n");
+            if (++news_timer % 150 == 0) live_news = fetch_real_intel(); 
+            session->send_msg(json({{"type", "intel_news"}, {"message", live_news[story_idx++ % live_news.size()]}}).dump() + "\n");
+            std::this_thread::sleep_for(std::chrono::seconds(2));
         }
     }).detach();
 
@@ -145,13 +155,12 @@ void handle_client(int client_socket) {
 
 int main() {
     setup_signals();
-    system("adb reverse tcp:19090 tcp:19090 2>/dev/null");
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1; setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    struct sockaddr_in addr; addr.sin_family = AF_INET; addr.sin_addr.s_addr = inet_addr("127.0.0.1"); addr.sin_port = htons(PORT);
+    struct sockaddr_in addr; addr.sin_family = AF_INET; addr.sin_addr.s_addr = INADDR_ANY; addr.sin_port = htons(PORT);
     bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
     listen(server_fd, 5);
-    std::cout << "[INTEL AGENT] Online on 127.0.0.1:19090" << std::endl;
+    std::cout << "[KAIZUKA HARDWARE LINK ACTIVE]" << std::endl;
     while (true) {
         int c = accept(server_fd, NULL, NULL);
         if (c >= 0) std::thread(handle_client, c).detach();
