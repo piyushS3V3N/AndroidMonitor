@@ -52,6 +52,9 @@ public class NativeBridge {
 
     public static String[] getTerminal() {
         synchronized (terminal) {
+            if (terminal.isEmpty() && currentTerminalLine.length() == 0) {
+                return new String[0];
+            }
             String[] result = terminal.toArray(new String[0]);
             // If there's an active partial line, show it too
             if (currentTerminalLine.length() > 0) {

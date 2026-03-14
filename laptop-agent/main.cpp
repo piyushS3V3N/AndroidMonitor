@@ -19,6 +19,12 @@
 #include <mach/mach_init.h>
 #include <mutex>
 #include <sstream>
+#include <sys/stat.h>
+
+#include <IOKit/IOKitLib.h>
+#include <IOKit/usb/IOUSBLib.h>
+#include <CoreFoundation/CoreFoundation.h>
+
 #include "json.hpp"
 
 using json = nlohmann::json;
@@ -33,6 +39,33 @@ std::string exec_shell(const std::string& cmd) {
         result += buffer.data();
     }
     return result;
+}
+
+void run_adb_reverse() {
+    std::cout << "[BRIDGE] Triggering ADB Reverse Tunnel on port " << PORT << "..." << std::endl;
+    system("adb reverse --remove-all 2>/dev/null");
+    system(("adb reverse tcp:" + std::to_string(PORT) + " tcp:" + std::to_string(PORT) + " 2>/dev/null").c_str());
+}
+
+void device_added(void* refCon, io_iterator_t iterator) {
+    io_service_t device;
+    while ((device = IOIteratorNext(iterator))) {
+        run_adb_reverse();
+        IOObjectRelease(device);
+    }
+}
+
+void start_usb_monitor() {
+    std::thread([]() {
+        IONotificationPortRef notificationPort = IONotificationPortCreate(kIOMasterPortDefault);
+        CFRunLoopSourceRef runLoopSource = IONotificationPortGetRunLoopSource(notificationPort);
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, kCFRunLoopDefaultMode);
+        io_iterator_t addedIter;
+        CFMutableDictionaryRef matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
+        IOServiceAddMatchingNotification(notificationPort, kIOPublishNotification, matchingDict, device_added, NULL, &addedIter);
+        device_added(NULL, addedIter);
+        CFRunLoopRun();
+    }).detach();
 }
 
 class SystemMetrics {
@@ -67,6 +100,7 @@ public:
     static std::string status(const std::string& cpu, const std::string& mem) { return json({{"type", "status"}, {"cpu", cpu}, {"memory", mem}}).dump() + "\n"; }
     static std::string git(const std::string& branch, const std::string& status) { return json({{"type", "git"}, {"branch", branch}, {"status", status}}).dump() + "\n"; }
     static std::string processes(const std::string& data) { return json({{"type", "processes"}, {"data", data}}).dump() + "\n"; }
+    static std::string project(const std::string& tech) { return json({{"type", "project"}, {"tech", tech}}).dump() + "\n"; }
 };
 
 class TerminalEngine {
@@ -90,20 +124,39 @@ public:
                 std::lock_guard<std::mutex> lock(send_mutex);
                 if (send(client_socket, msg.c_str(), msg.length(), 0) < 0) break;
             }
+            close(master_fd);
         }).detach();
     }
     void write_input(const std::string& input) { if (master_fd != -1) write(master_fd, input.c_str(), input.length()); }
 };
+
+bool file_exists(const std::string& name) {
+    struct stat buffer;   
+    return (stat (name.c_str(), &buffer) == 0); 
+}
+
+std::string detect_tech() {
+    if (file_exists("build.gradle.kts") || file_exists("build.gradle")) return "android";
+    if (file_exists("package.json")) return "nodejs";
+    if (file_exists("pom.xml")) return "maven";
+    if (file_exists("CMakeLists.txt")) return "cpp";
+    return "generic";
+}
 
 void handle_client(int client_socket) {
     std::mutex send_mutex;
     TerminalEngine terminal(client_socket, send_mutex);
     terminal.start();
 
-    // 1. Process Monitor & Metrics Loop
+    std::string tech = detect_tech();
+    {
+        std::string tech_msg = Protocol::project(tech);
+        std::lock_guard<std::mutex> lock(send_mutex);
+        send(client_socket, tech_msg.c_str(), tech_msg.length(), 0);
+    }
+
     std::thread([client_socket, &send_mutex]() {
         while (true) {
-            // Get Top 15 processes by CPU
             std::string proc_data = exec_shell("ps -Ao pid,pcpu,pmem,comm -r | head -n 16");
             std::string cpu = SystemMetrics::get_cpu();
             std::string mem = SystemMetrics::get_mem();
@@ -115,12 +168,29 @@ void handle_client(int client_socket) {
 
             {
                 std::lock_guard<std::mutex> lock(send_mutex);
-                send(client_socket, proc_msg.c_str(), proc_msg.length(), 0);
+                if (send(client_socket, proc_msg.c_str(), proc_msg.length(), 0) < 0) break;
                 send(client_socket, status_msg.c_str(), status_msg.length(), 0);
                 send(client_socket, git_msg.c_str(), git_msg.length(), 0);
             }
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
+    }).detach();
+
+    std::thread([client_socket, &send_mutex, tech]() {
+        std::string log_file = "logs/app.log";
+        if (tech == "android") log_file = "build.log";
+        system("mkdir -p logs && touch logs/app.log");
+        
+        FILE* pipe = popen(("tail -f " + log_file + " 2>/dev/null").c_str(), "r");
+        if (!pipe) return;
+        char buffer[1024];
+        while (fgets(buffer, sizeof(buffer), pipe)) {
+            std::string line(buffer);
+            std::string msg = Protocol::log("INFO", line);
+            std::lock_guard<std::mutex> lock(send_mutex);
+            if (send(client_socket, msg.c_str(), msg.length(), 0) < 0) break;
+        }
+        pclose(pipe);
     }).detach();
 
     char buffer[4096];
@@ -136,7 +206,9 @@ void handle_client(int client_socket) {
 }
 
 int main() {
-    system("adb reverse tcp:19090 tcp:19090 2>/dev/null");
+    start_usb_monitor();
+    run_adb_reverse();
+
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -146,7 +218,7 @@ int main() {
     address.sin_port = htons(PORT);
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) return 1;
     listen(server_fd, 5);
-    std::cout << "[PROCESS MONITOR ACTIVE] Agent Listening on 127.0.0.1:" << PORT << std::endl;
+    std::cout << "[MASTER AGENT] Active on 127.0.0.1:" << PORT << std::endl;
     while (true) {
         int client = accept(server_fd, NULL, NULL);
         if (client >= 0) std::thread(handle_client, client).detach();

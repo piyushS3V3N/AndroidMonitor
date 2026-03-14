@@ -5,6 +5,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.widget.Button;
 import android.widget.TextView;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -29,7 +30,17 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        Log.i(TAG, "!!! DASHBOARD STARTING - VERIFYING CONNECTIVITY !!!");
+        
+        // Enable Full Screen Immersive Mode
+        getWindow().getDecorView().setSystemUiVisibility(
+            android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            | android.view.View.SYSTEM_UI_FLAG_FULLSCREEN);
+
+        Log.i(TAG, "!!! DASHBOARD STARTING - IMMERSIVE MODE ENABLED !!!");
         setContentView(R.layout.activity_main);
 
         statusText = findViewById(R.id.status_text);
@@ -103,16 +114,26 @@ public class MainActivity extends AppCompatActivity {
             switch (type) {
                 case "terminal":
                     NativeBridge.pushTerminal(json.getString("data"));
-                    terminalAdapter.setData(NativeBridge.getTerminal());
-                    RecyclerView rvTerminal = findViewById(R.id.rv_terminal);
-                    rvTerminal.scrollToPosition(terminalAdapter.getItemCount() - 1);
+                    String[] tData = NativeBridge.getTerminal();
+                    if (tData != null && terminalAdapter != null) {
+                        terminalAdapter.setData(tData);
+                        RecyclerView rvTerminal = findViewById(R.id.rv_terminal);
+                        if (rvTerminal != null && terminalAdapter.getItemCount() > 0) {
+                            rvTerminal.scrollToPosition(terminalAdapter.getItemCount() - 1);
+                        }
+                    }
                     break;
                 case "log":
                     String logMsg = "[" + json.getString("level") + "] " + json.getString("message");
                     NativeBridge.pushLog(logMsg);
-                    logAdapter.setData(NativeBridge.getLogs());
-                    RecyclerView rvLogs = findViewById(R.id.rv_logs);
-                    rvLogs.scrollToPosition(logAdapter.getItemCount() - 1);
+                    String[] lData = NativeBridge.getLogs();
+                    if (lData != null && logAdapter != null) {
+                        logAdapter.setData(lData);
+                        RecyclerView rvLogs = findViewById(R.id.rv_logs);
+                        if (rvLogs != null && logAdapter.getItemCount() > 0) {
+                            rvLogs.scrollToPosition(logAdapter.getItemCount() - 1);
+                        }
+                    }
                     break;
                 case "status":
                     cpuText.setText("CPU: " + json.getString("cpu"));
@@ -125,10 +146,43 @@ public class MainActivity extends AppCompatActivity {
                     String procData = json.getString("data");
                     processAdapter.setData(procData.split("\n"));
                     break;
+                case "project":
+                    updateProjectTech(json.getString("tech"));
+                    break;
             }
         } catch (Exception e) {
             Log.e(TAG, "Error handling message type: " + type, e);
         }
+    }
+
+    private void updateProjectTech(String tech) {
+        mainHandler.post(() -> {
+            Button btnTest = findViewById(R.id.btn_test);
+            Button btnBuild = findViewById(R.id.btn_build);
+            Button btnGit = findViewById(R.id.btn_git);
+
+            if (btnTest == null || btnBuild == null || btnGit == null) {
+                Log.e(TAG, "UI Buttons not found, cannot update project tech labels.");
+                return;
+            }
+
+            if ("android".equals(tech)) {
+                btnTest.setText("GRADLE TEST");
+                btnBuild.setText("GRADLE ASSEMBLE");
+                btnTest.setOnClickListener(v -> sendCommand("./gradlew test"));
+                btnBuild.setOnClickListener(v -> sendCommand("./gradlew assembleDebug"));
+            } else if ("nodejs".equals(tech)) {
+                btnTest.setText("NPM TEST");
+                btnBuild.setText("NPM BUILD");
+                btnTest.setOnClickListener(v -> sendCommand("npm test"));
+                btnBuild.setOnClickListener(v -> sendCommand("npm run build"));
+            } else if ("maven".equals(tech)) {
+                btnTest.setText("MVN TEST");
+                btnBuild.setText("MVN PACKAGE");
+                btnTest.setOnClickListener(v -> sendCommand("mvn test"));
+                btnBuild.setOnClickListener(v -> sendCommand("mvn package"));
+            }
+        });
     }
 
     private void updateStatus(String text, int color) {
