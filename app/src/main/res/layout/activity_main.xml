@@ -17,7 +17,7 @@
         app:layout_constraintHeight_percent="0.25"
         app:layout_constraintTop_toTopOf="parent">
 
-        <!-- TILE 1: MASTER IDENTITY & INFRA (CONSOLIDATED) -->
+        <!-- TILE 1: MASTER CONSOLIDATED (IDENTITY + TELEMETRY) -->
         <androidx.cardview.widget.CardView
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -25,12 +25,12 @@
             app:cardBackgroundColor="@color/bg_sidebar"
             app:cardCornerRadius="0dp"
             android:layout_margin="1dp">
-            <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="10dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="8dp">
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:fontFamily="sans-serif"
+                    android:fontFamily="monospace"
                     android:text="KAIZUKA.OS // DEVSECOPS"
                     android:textColor="@color/accent_primary"
                     android:textSize="24sp"
@@ -39,87 +39,34 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
+                    android:layout_marginTop="1dp"
                     android:fontFamily="monospace"
                     android:text="OPERATOR: PIYUSH PARASHAR"
                     android:textColor="@color/white"
                     android:textSize="16sp" />
                 
-                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#222222" android:layout_marginTop="8dp" android:layout_marginBottom="8dp" />
-                
-                <TextView android:id="@+id/net_io_text" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="NET: --" android:textColor="@color/accent_info" android:textSize="9sp" android:fontFamily="monospace" />
-
-                <TextView android:id="@+id/status_text" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="CONNECTED" android:textColor="@color/accent_primary" android:textSize="9sp" android:fontFamily="monospace" android:gravity="center" android:background="#1A1A1A" android:padding="4dp" />
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:id="@+id/cpu_text"
-                        android:layout_width="50dp"
-                        android:layout_height="wrap_content"
-                        android:fontFamily="monospace"
-                        android:text="CPU:--"
-                        android:textColor="@color/white"
-                        android:textSize="8sp" />
-
-                    <com.github.mikephil.charting.charts.LineChart
-                        android:id="@+id/cpu_chart"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginTop="4dp">
+                    <TextView android:id="@+id/net_io_text" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="NET: --" android:textColor="@color/accent_info" android:textSize="8sp" android:fontFamily="monospace" />
+                    <TextView android:id="@+id/status_text" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AWAITING" android:textColor="@color/accent_primary" android:textSize="8sp" android:fontFamily="monospace" android:background="#1A1A1A" android:paddingStart="4dp" android:paddingEnd="4dp" />
                 </LinearLayout>
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#222222" android:layout_marginTop="4dp" android:layout_marginBottom="4dp" />
 
-                    <TextView
-                        android:id="@+id/mem_text"
-                        android:layout_width="50dp"
-                        android:layout_height="wrap_content"
-                        android:fontFamily="monospace"
-                        android:text="RAM:--"
-                        android:textColor="@color/white"
-                        android:textSize="8sp" />
-
-                    <com.github.mikephil.charting.charts.LineChart
-                        android:id="@+id/ram_chart"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent" />
+                <!-- Integrated Telemetry Stack -->
+                <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/cpu_text" android:layout_width="45dp" android:layout_height="wrap_content" android:text="CPU:--" android:textColor="@color/white" android:textSize="8sp" android:fontFamily="monospace" />
+                    <com.github.mikephil.charting.charts.LineChart android:id="@+id/cpu_chart" android:layout_width="match_parent" android:layout_height="match_parent" />
                 </LinearLayout>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="0dp"
-                    android:layout_weight="1"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:id="@+id/disk_text"
-                        android:layout_width="50dp"
-                        android:layout_height="wrap_content"
-                        android:fontFamily="monospace"
-                        android:text="DSK:--"
-                        android:textColor="@color/white"
-                        android:textSize="8sp" />
-
-                    <com.github.mikephil.charting.charts.LineChart
-                        android:id="@+id/disk_chart"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/mem_text" android:layout_width="45dp" android:layout_height="wrap_content" android:text="RAM:--" android:textColor="@color/white" android:textSize="8sp" android:fontFamily="monospace" />
+                    <com.github.mikephil.charting.charts.LineChart android:id="@+id/ram_chart" android:layout_width="match_parent" android:layout_height="match_parent" />
+                </LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:id="@+id/disk_text" android:layout_width="45dp" android:layout_height="wrap_content" android:text="DSK:--" android:textColor="@color/white" android:textSize="8sp" android:fontFamily="monospace" />
+                    <com.github.mikephil.charting.charts.LineChart android:id="@+id/disk_chart" android:layout_width="match_parent" android:layout_height="match_parent" />
                 </LinearLayout>
             </LinearLayout>
         </androidx.cardview.widget.CardView>
-
-        <!-- TILE 2: STACKED ANALYTICS -->
 
         <!-- TILE 3: CYBER INTEL -->
         <androidx.cardview.widget.CardView
@@ -157,11 +104,7 @@
                     <TextView android:id="@+id/label_ns" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="[ NS ]" android:textColor="@color/accent_primary" android:textSize="10sp" android:layout_centerVertical="true" android:textStyle="bold" />
                     <Spinner android:id="@+id/spinner_namespace" android:layout_width="wrap_content" android:layout_height="match_parent" android:layout_toEndOf="@id/label_ns" android:backgroundTint="@color/accent_primary" />
                 </RelativeLayout>
-
-                <androidx.recyclerview.widget.RecyclerView
-                    android:id="@+id/rv_k8s_pods"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent" />
+                <androidx.recyclerview.widget.RecyclerView android:id="@+id/rv_k8s_pods" android:layout_width="match_parent" android:layout_height="match_parent" />
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 

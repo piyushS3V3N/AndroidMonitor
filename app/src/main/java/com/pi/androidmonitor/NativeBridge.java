@@ -8,15 +8,9 @@ public class NativeBridge {
     private static final List<String> logs = new ArrayList<>();
     private static final List<String> terminal = new ArrayList<>();
     private static final int MAX_LINES = 500;
+    private static StringBuilder currentTerminalLine = new StringBuilder();
 
-    static {
-        try {
-            System.loadLibrary("androidmonitor");
-        } catch (UnsatisfiedLinkError e) {
-            Log.e("NativeBridge", "Native library fallback");
-        }
-    }
-
+    // Pure Java Implementation - 100% Stable
     public static void pushLog(String log) {
         if (log == null) return;
         synchronized (logs) {
@@ -30,8 +24,6 @@ public class NativeBridge {
             return logs.toArray(new String[0]);
         }
     }
-
-    private static StringBuilder currentTerminalLine = new StringBuilder();
 
     public static void pushTerminal(String data) {
         if (data == null) return;
@@ -50,7 +42,6 @@ public class NativeBridge {
                         currentTerminalLine.setLength(currentTerminalLine.length() - 1);
                     }
                 } else {
-                    // Preserving ALL characters (including ESC) for the UI parser
                     currentTerminalLine.append(c);
                 }
             }
@@ -62,10 +53,13 @@ public class NativeBridge {
         synchronized (terminal) {
             String[] result = terminal.toArray(new String[0]);
             String partial = currentTerminalLine.toString();
-            String[] finalResult = new String[result.length + 1];
-            System.arraycopy(result, 0, finalResult, 0, result.length);
-            finalResult[result.length] = partial;
-            return finalResult;
+            if (!partial.isEmpty() || result.length == 0) {
+                String[] finalResult = new String[result.length + 1];
+                System.arraycopy(result, 0, finalResult, 0, result.length);
+                finalResult[result.length] = partial;
+                return finalResult;
+            }
+            return result;
         }
     }
 }
