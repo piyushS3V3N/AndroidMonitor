@@ -1,3 +1,21 @@
 <resources>
-    <string name="app_name">AndroidMonitor</string>
+    <string name="app_name">DevMonitor Pro</string>
+    <string name="status_awaiting_link">AWAITING.LINK</string>
+    <string name="status_link_ok">HW.LINK.OK</string>
+    <string name="cpu_format">CPU: %.1f%%</string>
+    <string name="ram_format">RAM: %.1fGB</string>
+    <string name="disk_format">DSK: %.1f%%</string>
+    <string name="net_format">NET: %s</string>
+    <string name="action_focus_pod">[ACTION] FOCUSING POD: %s\n</string>
+    <string name="dialog_net_config_title">CONNECTION.CONFIG</string>
+    <string name="dialog_net_config_hint">Target IP (e.g. 192.168.1.50)</string>
+    <string name="dialog_net_config_subtext">* Use this if UDP discovery is blocked by firewall</string>
+    <string name="btn_save">SAVE</string>
+    <string name="btn_cancel">CANCEL</string>
+
+    <string name="label_conn_mode">MODE:</string>
+    <string name="mode_auto">AUTO (PREFER USB)</string>
+    <string name="mode_network">NETWORK ONLY</string>
+    <string name="mode_usb">USB ONLY</string>
+    <string name="mode_adb">ADB (LOCALHOST)</string>
 </resources>

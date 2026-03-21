@@ -14,11 +14,19 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
+import android.view.LayoutInflater;
 import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
+import android.widget.EditText;
+import android.widget.ImageButton;
 import android.widget.Spinner;
 import android.widget.TextView;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import com.github.mikephil.charting.charts.LineChart;
@@ -38,15 +46,21 @@ import java.net.DatagramSocket;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "DevCompanion";
     private static final String ACTION_USB_PERMISSION = "com.pi.androidmonitor.USB_PERMISSION";
     
+    private enum ConnectionMode { AUTO, NETWORK, USB, ADB }
+    private ConnectionMode currentMode = ConnectionMode.AUTO;
+    
     private DataListAdapter podAdapter, k8sLogAdapter, dockerAdapter, processAdapter, radarAdapter, intelAdapter;
     private TextView cpuText, memText, diskText, netIoText, statusText;
     private LineChart cpuChart, ramChart, diskChart;
     private Spinner nsSpinner;
+    private ImageButton btnSettings;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<String> namespaces = new ArrayList<>();
     
@@ -58,31 +72,57 @@ public class MainActivity extends AppCompatActivity {
     private PrintWriter networkOut;
     private boolean isLinked = false;
     private String discoveredIp = null;
+    private String manualIp = null;
+    
+    // Professional thread management
+    private final ExecutorService networkExecutor = Executors.newFixedThreadPool(4);
+    
+    // Alert System
+    private AlertManager alertManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().getDecorView().setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN);
         setContentView(R.layout.activity_main);
 
+        mainHandler.post(this::setupImmersiveMode);
+
         usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
+        alertManager = new AlertManager(this);
+        
         initViews();
         setupRecyclerViews();
         setupCharts();
         
         IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
         filter.addAction(UsbManager.ACTION_USB_ACCESSORY_DETACHED);
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(usbReceiver, filter);
-        }
+        
+        ContextCompat.registerReceiver(this, usbReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
 
         startDiscoveryLoop();
         startHardwareLinkLoop(); 
+    }
+
+    private void setupImmersiveMode() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                final WindowInsetsController controller = getWindow().getInsetsController();
+                if (controller != null) {
+                    controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                    controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                }
+            } else {
+                View decorView = getWindow().getDecorView();
+                if (decorView != null) {
+                    decorView.setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Immersive mode setup failed", e);
+        }
     }
 
     private void initViews() {
@@ -95,6 +135,14 @@ public class MainActivity extends AppCompatActivity {
         ramChart = findViewById(R.id.ram_chart);
         diskChart = findViewById(R.id.disk_chart);
         nsSpinner = findViewById(R.id.spinner_namespace);
+        btnSettings = findViewById(R.id.btn_settings);
+
+        if (statusText != null) {
+            statusText.setOnClickListener(v -> showNetworkConfigDialog());
+        }
+        if (btnSettings != null) {
+            btnSettings.setOnClickListener(v -> showNetworkConfigDialog());
+        }
     }
 
     private void setupCharts() {
@@ -128,12 +176,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startDiscoveryLoop() {
-        new Thread(() -> {
-            try {
-                DatagramSocket socket = new DatagramSocket(19091);
+        networkExecutor.execute(() -> {
+            try (DatagramSocket socket = new DatagramSocket(19091)) {
                 socket.setBroadcast(true);
                 byte[] buffer = new byte[1024];
-                while (true) {
+                while (!Thread.currentThread().isInterrupted()) {
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     socket.receive(packet);
                     String msg = new String(packet.getData(), 0, packet.getLength());
@@ -142,32 +189,98 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
             } catch (Exception e) { Log.e(TAG, "Discovery failed", e); }
-        }).start();
+        });
     }
 
     private void startHardwareLinkLoop() {
-        new Thread(() -> {
-            while (true) {
-                if (isLinked) { try { Thread.sleep(5000); } catch (Exception ignored) {} continue; }
-                UsbAccessory[] accs = usbManager.getAccessoryList();
-                if (accs != null && accs.length > 0) {
-                    mainHandler.post(() -> requestUsbPermission(accs[0]));
-                    try { Thread.sleep(5000); } catch (Exception ignored) {} continue;
+        networkExecutor.execute(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                if (isLinked) {
+                    try { Thread.sleep(5000); } catch (InterruptedException e) { break; }
+                    continue;
                 }
-                if (discoveredIp != null) {
-                    try {
-                        Socket s = new Socket(discoveredIp, 19090);
-                        handleConnection(new BufferedReader(new InputStreamReader(s.getInputStream())), new PrintWriter(s.getOutputStream(), true));
-                    } catch (Exception ignored) {}
+                
+                // 1. Handle USB Mode
+                if (currentMode == ConnectionMode.AUTO || currentMode == ConnectionMode.USB) {
+                    UsbAccessory[] accs = usbManager.getAccessoryList();
+                    if (accs != null && accs.length > 0) {
+                        mainHandler.post(() -> requestUsbPermission(accs[0]));
+                        try { Thread.sleep(5000); } catch (InterruptedException e) { break; }
+                        continue;
+                    }
                 }
-                try {
-                    Socket s = new Socket("127.0.0.1", 19090);
-                    handleConnection(new BufferedReader(new InputStreamReader(s.getInputStream())), new PrintWriter(s.getOutputStream(), true));
-                } catch (Exception ignored) {}
-                mainHandler.post(() -> { if(statusText!=null) statusText.setText("AWAITING.LINK"); });
-                try { Thread.sleep(3000); } catch (Exception ignored) {}
+
+                // 2. Handle Network/ADB Modes
+                if (currentMode != ConnectionMode.USB) {
+                    List<String> targets = new ArrayList<>();
+                    if (currentMode == ConnectionMode.ADB) {
+                        targets.add("127.0.0.1"); // Forwarded via 'adb reverse tcp:19090 tcp:19090'
+                    } else if (currentMode == ConnectionMode.NETWORK) {
+                        if (manualIp != null) targets.add(manualIp);
+                        if (discoveredIp != null) targets.add(discoveredIp);
+                    } else if (currentMode == ConnectionMode.AUTO) {
+                        if (manualIp != null) targets.add(manualIp);
+                        if (discoveredIp != null) targets.add(discoveredIp);
+                        targets.add("127.0.0.1");
+                    }
+
+                    for (String target : targets) {
+                        if (target == null) continue;
+                        try (Socket s = new Socket(target, 19090)) {
+                            handleConnection(new BufferedReader(new InputStreamReader(s.getInputStream())), 
+                                           new PrintWriter(s.getOutputStream(), true));
+                            break;
+                        } catch (Exception ignored) {}
+                    }
+                }
+                
+                mainHandler.post(() -> { if(statusText!=null) statusText.setText(R.string.status_awaiting_link); });
+                try { Thread.sleep(3000); } catch (InterruptedException e) { break; }
             }
-        }).start();
+        });
+    }
+
+    private void showNetworkConfigDialog() {
+        View view = LayoutInflater.from(this).inflate(R.layout.dialog_network_config, null);
+        EditText editIp = view.findViewById(R.id.edit_ip);
+        Spinner modeSpinner = view.findViewById(R.id.spinner_conn_mode);
+        View ipLayout = view.findViewById(R.id.ip_input_layout);
+        View netSubtext = view.findViewById(R.id.tv_net_subtext);
+
+        if (manualIp != null) editIp.setText(manualIp);
+
+        String[] modes = {
+            getString(R.string.mode_auto),
+            getString(R.string.mode_network),
+            getString(R.string.mode_usb),
+            getString(R.string.mode_adb)
+        };
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, modes);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        modeSpinner.setAdapter(adapter);
+        modeSpinner.setSelection(currentMode.ordinal());
+
+        modeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                boolean isNet = (position == ConnectionMode.NETWORK.ordinal() || position == ConnectionMode.AUTO.ordinal());
+                ipLayout.setVisibility(isNet ? View.VISIBLE : View.GONE);
+                netSubtext.setVisibility(isNet ? View.VISIBLE : View.GONE);
+            }
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+
+        new AlertDialog.Builder(this, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
+                .setView(view)
+                .setPositiveButton(R.string.btn_save, (dialog, which) -> {
+                    currentMode = ConnectionMode.values()[modeSpinner.getSelectedItemPosition()];
+                    String ip = editIp.getText().toString().trim();
+                    manualIp = ip.isEmpty() ? null : ip;
+                    isLinked = false; // Force reconnect with new settings
+                })
+                .setNegativeButton(R.string.btn_cancel, null)
+                .show();
     }
 
     private void requestUsbPermission(UsbAccessory accessory) {
@@ -194,7 +307,7 @@ public class MainActivity extends AppCompatActivity {
                 FileDescriptor fd = fileDescriptor.getFileDescriptor();
                 inputStream = new FileInputStream(fd);
                 outputStream = new FileOutputStream(fd);
-                new Thread(() -> handleConnection(new BufferedReader(new InputStreamReader(inputStream)), new PrintWriter(outputStream, true))).start();
+                networkExecutor.execute(() -> handleConnection(new BufferedReader(new InputStreamReader(inputStream)), new PrintWriter(outputStream, true)));
             }
         } catch (Exception e) { isLinked = false; }
     }
@@ -206,8 +319,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void handleConnection(BufferedReader in, PrintWriter out) {
         isLinked = true;
-        networkOut = out; // Store for command dispatch
-        mainHandler.post(() -> { if(statusText!=null) statusText.setText("HW.LINK.OK"); });
+        networkOut = out;
+        mainHandler.post(() -> { if(statusText!=null) statusText.setText(R.string.status_link_ok); });
         try {
             String line;
             while ((line = in.readLine()) != null) {
@@ -229,60 +342,80 @@ public class MainActivity extends AppCompatActivity {
                 j.put("pod", parts[1]);
                 dispatchCommand(j.toString());
                 
-                NativeBridge.pushTerminal("\n[ACTION] FOCUSING POD: " + parts[1] + "\n");
+                String actionMsg = getString(R.string.action_focus_pod, parts[1]);
+                NativeBridge.pushTerminal(actionMsg);
                 k8sLogAdapter.setData(NativeBridge.getTerminal());
             } catch (Exception e) { Log.e(TAG, "Command failed", e); }
         }
     }
 
     private void dispatchCommand(String cmd) {
-        new Thread(() -> {
+        networkExecutor.execute(() -> {
             try {
                 String frame = cmd + "\n";
-                // 1. Try Network Path
                 if (networkOut != null) {
                     networkOut.println(cmd);
                     networkOut.flush();
                 }
-                // 2. Try USB Path
                 if (outputStream != null) {
                     outputStream.write(frame.getBytes());
                     outputStream.flush();
                 }
             } catch (Exception e) { Log.e(TAG, "Dispatch error", e); }
-        }).start();
+        });
     }
 
     private void handleJson(String raw) {
         try {
             JSONObject j = new JSONObject(raw);
             String type = j.optString("type", "unknown");
-            if ("telemetry".equals(type)) {
-                if(cpuText!=null) cpuText.setText("CPU: " + String.format("%.1f%%", j.optDouble("cpu", 0)));
-                if(memText!=null) memText.setText("RAM: " + String.format("%.1fGB", j.optDouble("mem_used", 0)));
-                if(diskText!=null) diskText.setText("DSK: " + String.format("%.1f%%", j.optDouble("disk_p", 0)));
-                if(netIoText!=null) netIoText.setText("NET: " + j.optString("net_io", "--"));
-                updateSparkline(cpuChart, j.optJSONArray("cpu_h"));
-                updateSparkline(ramChart, j.optJSONArray("mem_h"));
-                updateSparkline(diskChart, j.optJSONArray("disk_h"));
-            } else if ("k8s_pods".equals(type)) {
-                podAdapter.setData(j.optString("data", "").split("\n"));
-                updateNamespaces(j.optString("data", ""));
-            } else if ("docker".equals(type)) {
-                dockerAdapter.setData(j.optString("data", "").split("\n"));
-            } else if ("processes".equals(type)) {
-                processAdapter.setData(j.optString("data", "").split("\n"));
-            } else if ("sec_radar".equals(type)) {
-                radarAdapter.setData(j.optString("data", "").split("\n"));
-            } else if ("intel_news".equals(type)) {
-                NativeBridge.pushLog(j.optString("message", ""));
-                intelAdapter.setData(NativeBridge.getLogs());
-            } else if ("k8s_log".equals(type)) {
-                NativeBridge.pushTerminal(j.optString("message", ""));
-                k8sLogAdapter.setData(NativeBridge.getTerminal());
-                scroll(R.id.rv_k8s_logs, k8sLogAdapter);
+            switch (type) {
+                case "telemetry":
+                    updateTelemetry(j);
+                    break;
+                case "k8s_pods":
+                    podAdapter.setData(j.optString("data", "").split("\n"));
+                    updateNamespaces(j.optString("data", ""));
+                    break;
+                case "docker":
+                    dockerAdapter.setData(j.optString("data", "").split("\n"));
+                    break;
+                case "processes":
+                    processAdapter.setData(j.optString("data", "").split("\n"));
+                    break;
+                case "sec_radar":
+                    radarAdapter.setData(j.optString("data", "").split("\n"));
+                    break;
+                case "intel_news":
+                    String intelMsg = j.optString("message", "");
+                    alertManager.checkLogForErrors(intelMsg);
+                    NativeBridge.pushLog(intelMsg);
+                    intelAdapter.setData(NativeBridge.getLogs());
+                    break;
+                case "k8s_log":
+                    String logMsg = j.optString("message", "");
+                    alertManager.checkLogForErrors(logMsg);
+                    NativeBridge.pushTerminal(logMsg);
+                    k8sLogAdapter.setData(NativeBridge.getTerminal());
+                    scroll(R.id.rv_k8s_logs, k8sLogAdapter);
+                    break;
             }
         } catch (Exception e) { Log.e(TAG, "Parse error", e); }
+    }
+
+    private void updateTelemetry(JSONObject j) throws Exception {
+        double cpu = j.optDouble("cpu", 0);
+        double ram = j.optDouble("mem_used", 0);
+        
+        alertManager.checkTelemetry(cpu, ram);
+        
+        if(cpuText!=null) cpuText.setText(getString(R.string.cpu_format, cpu));
+        if(memText!=null) memText.setText(getString(R.string.ram_format, ram));
+        if(diskText!=null) diskText.setText(getString(R.string.disk_format, j.optDouble("disk_p", 0)));
+        if(netIoText!=null) netIoText.setText(getString(R.string.net_format, j.optString("net_io", "--")));
+        updateSparkline(cpuChart, j.optJSONArray("cpu_h"));
+        updateSparkline(ramChart, j.optJSONArray("mem_h"));
+        updateSparkline(diskChart, j.optJSONArray("disk_h"));
     }
 
     private void updateNamespaces(String data) {
@@ -318,5 +451,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
-    protected void onDestroy() { super.onDestroy(); try { unregisterReceiver(usbReceiver); } catch (Exception ignored) {} closeAccessory(); }
+    protected void onDestroy() { 
+        super.onDestroy(); 
+        networkExecutor.shutdownNow();
+        try { unregisterReceiver(usbReceiver); } catch (Exception ignored) {} 
+        closeAccessory(); 
+    }
 }

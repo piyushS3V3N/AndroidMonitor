@@ -27,14 +27,31 @@
             android:layout_margin="1dp">
             <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="8dp">
 
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:text="KAIZUKA.OS // DEVSECOPS"
-                    android:textColor="@color/accent_primary"
-                    android:textSize="24sp"
-                    android:textStyle="bold" />
+                <RelativeLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <TextView
+                        android:id="@+id/title_text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:text="KAIZUKA.OS // DEVSECOPS"
+                        android:textColor="@color/accent_primary"
+                        android:textSize="20sp"
+                        android:textStyle="bold"
+                        android:layout_toStartOf="@+id/btn_settings"
+                        android:layout_alignParentStart="true" />
+
+                    <ImageButton
+                        android:id="@+id/btn_settings"
+                        android:layout_width="24dp"
+                        android:layout_height="24dp"
+                        android:layout_alignParentEnd="true"
+                        android:layout_centerVertical="true"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:src="@android:drawable/ic_menu_preferences"
+                        android:contentDescription="@string/btn_save"
+                        android:scaleType="fitCenter"
+                        app:tint="@color/accent_primary" />
+                </RelativeLayout>
 
                 <TextView
                     android:layout_width="match_parent"
@@ -43,7 +60,7 @@
                     android:fontFamily="monospace"
                     android:text="OPERATOR: PIYUSH PARASHAR"
                     android:textColor="@color/white"
-                    android:textSize="16sp" />
+                    android:textSize="14sp" />
                 
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginTop="4dp">
                     <TextView android:id="@+id/net_io_text" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="NET: --" android:textColor="@color/accent_info" android:textSize="8sp" android:fontFamily="monospace" />
